@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ร้าน 3D</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;600;700&display=swap">
+<style>
+/* Layout: full-bleed 3D stage, slim header bar, legend + view controls floating bottom */
+:root {
+  --bg: #EEF0F2; --panel: #FFFFFF; --fg: #1F2328; --muted: #5B636C;
+  --line: #D3D8DE; --accent: #2F5D8A; --stage: #DDE2E7;
+  --font: 'IBM Plex Sans Thai', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15181C; --panel: #1E2227; --fg: #E8EBEE; --muted: #A2AAB3;
+  --line: #333A42; --accent: #8DB6E0; --stage: #1A1E23; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #15181C; --panel: #1E2227; --fg: #E8EBEE; --muted: #A2AAB3;
+  --line: #333A42; --accent: #8DB6E0; --stage: #1A1E23; color-scheme: dark }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); display: flex; flex-direction: column; overflow: hidden; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); border-bottom: 1px solid var(--line); background: var(--panel); }
+h1 { margin: 0; font-size: 18px; font-weight: 700; text-wrap: balance; }
+header p { margin: 0; font-size: 13px; color: var(--muted); }
+#stage { position: relative; flex: 1; min-height: 0; background: var(--stage); }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.dock { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: flex-end; pointer-events: none; }
+.card { pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+.legend { display: grid; grid-template-columns: repeat(2, minmax(0, auto)); gap: 4px 14px; font-size: 12px; }
+.legend span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.legend i { width: 14px; height: 10px; border-radius: 2px; border: 1px solid rgba(0,0,0,.25); flex: none; }
+.views { display: flex; flex-wrap: wrap; gap: 6px; }
+button { font: inherit; font-size: 13px; padding: 8px 12px; min-height: 40px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+button[aria-pressed="true"] { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint { position: absolute; top: 10px; left: max(12px, env(safe-area-inset-left, 0px)); right: 12px; font-size: 12px; color: var(--muted); }
+@media (max-width: 560px) { .legend { grid-template-columns: minmax(0, auto); } }
+</style>
+
+<style>body{margin:0}</style>
+</head>
+<body>
+<header>
+  <h1>ร้าน 3D</h1>
+  <p id="sub"></p>
+</header>
+<div id="stage">
+  <div class="hint">ลากเพื่อหมุน · หมุนล้อ/บีบนิ้วเพื่อซูม · คลิกขวาหรือสองนิ้วเพื่อเลื่อน</div>
+  <div class="dock">
+    <div class="card legend" id="legend"></div>
+    <div class="card views">
+      <button id="l-before" aria-pressed="false">ก่อน</button>
+      <button id="l-after" aria-pressed="false">หลัง</button>
+      <button id="l-after2" aria-pressed="false">หลัง 2</button>
+      <button id="l-v4" aria-pressed="true">แบบ 4</button>
+      <span style="width:1px;background:var(--line);margin:0 2px" aria-hidden="true"></span>
+      <button id="v-iso" aria-pressed="true">มุมเฉียง</button>
+      <button id="v-top" aria-pressed="false">มุมบน</button>
+      <button id="v-front" aria-pressed="false">จากหน้าร้าน</button>
+      <button id="v-walls" aria-pressed="true">ผนัง</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function () {
+  // Plan units: 1 px = 2.5 cm (40 px = 1 m). x to the right, y toward the front glass.
+  var C = {
+    comp: [0xA27B3C, 'โต๊ะคอม'], util: [0xF2F2EE, 'โต๊ะวางของ'], high: [0xE9D54A, 'โต๊ะสูง'],
+    acct: [0x9A9A9A, 'โต๊ะบัญชี'], red: [0xD8383B, 'ชั้นใส่สินค้า'], green: [0x2EAD5B, 'ชั้นสินค้าเล็ก'],
+    black: [0x232323, 'ชั้นดำ'], blue: [0x3B53A4, 'ตู้เงินและเอกสาร'], door: [0xB5509E, 'ประตู'],
+    glass: [0x96C8E1, 'กระจก']
+  };
+  var lg = document.getElementById('legend');
+  ['comp','util','high','acct','red','green','black','blue','door','glass'].forEach(function (key) {
+    var s = document.createElement('span'), i = document.createElement('i');
+    i.style.background = '#' + C[key][0].toString(16).padStart(6, '0');
+    s.appendChild(i); s.appendChild(document.createTextNode(C[key][1])); lg.appendChild(s);
+  });
+  if (!window.THREE || !THREE.OrbitControls) { document.querySelector('.hint').textContent = 'โหลดตัวแสดงผล 3D ไม่สำเร็จ ลองรีเฟรชหน้านี้'; return; }
+
+  var stage = document.getElementById('stage');
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  stage.insertBefore(renderer.domElement, stage.firstChild);
+  var scene = new THREE.Scene();
+  function stageColor() { return getComputedStyle(document.documentElement).getPropertyValue('--stage').trim() || '#DDE2E7'; }
+  scene.background = new THREE.Color(stageColor());
+  var camera = new THREE.PerspectiveCamera(40, 1, 0.05, 200);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.495;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9488, 0.85));
+  var sun = new THREE.DirectionalLight(0xfff4e6, 0.7);
+  sun.position.set(9, 18, 12); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.0005;
+  var sc = sun.shadow.camera; sc.left = -11; sc.right = 11; sc.top = 13; sc.bottom = -13;
+  sun.target.position.set(4, 0, 5); scene.add(sun); scene.add(sun.target);
+
+  // ---------- materials ----------
+  var matCache = {};
+  function mat(color, o) {
+    o = o || {};
+    var key = color + '|' + (o.r || 0.7) + '|' + (o.m || 0) + '|' + (o.op || 1);
+    if (!matCache[key]) matCache[key] = new THREE.MeshStandardMaterial({ color: color, roughness: o.r == null ? 0.7 : o.r, metalness: o.m || 0, transparent: (o.op || 1) < 1, opacity: o.op || 1 });
+    return matCache[key];
+  }
+  function tileTexture() {
+    var c = document.createElement('canvas'); c.width = c.height = 256; var g = c.getContext('2d');
+    g.fillStyle = '#E9E4D8'; g.fillRect(0, 0, 256, 256);
+    g.strokeStyle = '#CFC8B8'; g.lineWidth = 3; g.strokeRect(0, 0, 256, 256);
+    var t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.encoding = THREE.sRGBEncoding; return t;
+  }
+  var GLASS = new THREE.MeshStandardMaterial({ color: 0xBFDDEB, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.28, depthWrite: false });
+  var ALU = mat(0xB9BEC4, { r: 0.35, m: 0.8 }), WALL = mat(0xEEEBE4, { r: 0.9 }), CONC = mat(0x8E9095, { r: 0.85 });
+  var WOOD = mat(0x8A6A48, { r: 0.6 }), DARK = mat(0x2A2C30, { r: 0.5 }), SCREEN = mat(0x101317, { r: 0.25, m: 0.3 });
+  var FABRIC = mat(0x3A3F47, { r: 0.9 }), CHROME = mat(0xC9CDD2, { r: 0.25, m: 0.9 });
+
+  var wallGroup = new THREE.Group(); scene.add(wallGroup);
+  var world = new THREE.Group(); scene.add(world);
+
+  // box by world centre/size (metres)
+  function box(parent, cx, cy, cz, sx, sy, sz, m, shadow) {
+    var mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), m);
+    mesh.position.set(cx, cy, cz);
+    mesh.castShadow = shadow !== false; mesh.receiveShadow = true;
+    parent.add(mesh); return mesh;
+  }
+  function cyl(parent, cx, cy, cz, r, h, m) {
+    var mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 18), m);
+    mesh.position.set(cx, cy, cz); mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh); return mesh;
+  }
+  // plan-px rectangle -> world box
+  function pbox(parent, x0, y0, x1, y1, z0, h, m, shadow) {
+    return box(parent, (x0 + x1) / 80, z0 + h / 2, (y0 + y1) / 80, (x1 - x0) / 40, h, (y1 - y0) / 40, m, shadow);
+  }
+
+  // ---------- seeded random for products ----------
+  var seed = 7; function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+  var productPalette = [0xF2EDE3, 0xD9C7A5, 0xC8A27A, 0xE6E6E6, 0x7FA7C9, 0xE9B44C, 0xBFD7B5, 0xD98C6A, 0x9E9EAE, 0xF4D6C6];
+  var products = []; // {x,y,z,sx,sy,sz,color}
+
+  // ---------- shelving unit ----------
+  // x0..x1, y0..y1 in plan px; h metres; levels count; frame colour; doubleSided: products both faces
+  function shelf(x0, y0, x1, y1, h, levels, frameColor, opts) {
+    opts = opts || {};
+    var X0 = x0 / 40, X1 = x1 / 40, Z0 = y0 / 40, Z1 = y1 / 40;
+    var w = X1 - X0, d = Z1 - Z0, cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2;
+    var alongX = w >= d, L = alongX ? w : d, D = alongX ? d : w;
+    var g = new THREE.Group(); world.add(g);
+    var frame = mat(frameColor, { r: 0.45, m: 0.35 });
+    var board = mat(opts.board || 0xF1F1EE, { r: 0.6 });
+    var post = 0.035;
+    function P(a, b) { return alongX ? [cx + a, cz + b] : [cx + b, cz + a]; } // a along length, b across depth
+    function S(a, b) { return alongX ? [a, b] : [b, a]; }
+    [-1, 1].forEach(function (sa) { [-1, 1].forEach(function (sb) {
+      var p = P(sa * (L / 2 - post / 2 - 0.01), sb * (D / 2 - post / 2 - 0.01));
+      box(g, p[0], h / 2, p[1], post, h, post, frame);
+    }); });
+    // centre back panel (gondola) or rear panel
+    var bp = P(0, opts.backSide ? opts.backSide * (D / 2 - 0.02) : 0), bs = S(L - 0.04, 0.015);
+    box(g, bp[0], h / 2 + 0.03, bp[1], bs[0], h - 0.06, bs[1], frame);
+    // kick plate
+    var kp = S(L - 0.02, D - 0.02); box(g, cx, 0.05, cz, kp[0], 0.1, kp[1], frame);
+    // levels + products
+    for (var i = 0; i < levels; i++) {
+      var y = 0.1 + i * (h - 0.16) / (levels - 1);
+      var bsz = S(L - 0.02, D - 0.02);
+      box(g, cx, y + 0.01, cz, bsz[0], 0.02, bsz[1], board);
+      if (i === levels - 1) continue;
+      var gapH = (h - 0.16) / (levels - 1) - 0.04;
+      var sides = opts.backSide ? [-opts.backSide] : [-1, 1];
+      sides.forEach(function (sd) {
+        var depth = (opts.backSide ? D - 0.06 : D / 2 - 0.04) * 0.92;
+        var centreB = opts.backSide ? -opts.backSide * 0.0 : sd * (D / 4);
+        if (opts.backSide) centreB = 0 - opts.backSide * 0.01;
+        var a = -L / 2 + 0.06;
+        while (a < L / 2 - 0.12) {
+          var pw = 0.12 + rnd() * 0.22; if (a + pw > L / 2 - 0.05) pw = L / 2 - 0.05 - a;
+          if (pw < 0.06) break;
+          if (rnd() > 0.12) {
+            var ph = Math.min(gapH * (0.45 + rnd() * 0.45), 0.45), pd = depth * (0.7 + rnd() * 0.3);
+            var pc = P(a + pw / 2, centreB), ps = S(pw - 0.015, pd);
+            products.push({ x: pc[0], y: y + 0.02 + ph / 2, z: pc[1], sx: ps[0], sy: ph, sz: ps[1], c: opts.bins ? [0x55585E, 0x6E7178, 0x3E4146][Math.floor(rnd() * 3)] : productPalette[Math.floor(rnd() * productPalette.length)] });
+          }
+          a += pw;
+        }
+      });
+    }
+  }
+
+  // ---------- desk with monitor + chair ----------
+  // sit: direction the person sits from the desk: 'x+','x-','z+','z-'
+  function desk(x0, y0, x1, y1, topColor, sit, opts) {
+    opts = opts || {};
+    var X0 = x0 / 40, X1 = x1 / 40, Z0 = y0 / 40, Z1 = y1 / 40, h = opts.h || 0.75;
+    var cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2, w = X1 - X0, d = Z1 - Z0;
+    var g = new THREE.Group(); world.add(g);
+    var top = mat(topColor, { r: 0.55 });
+    box(g, cx, h - 0.015, cz, w, 0.03, d, top);
+    var legM = opts.legs || DARK, li = 0.04;
+    [[X0 + li, Z0 + li], [X1 - li, Z0 + li], [X0 + li, Z1 - li], [X1 - li, Z1 - li]].forEach(function (p) { box(g, p[0], (h - 0.03) / 2, p[1], 0.04, h - 0.03, 0.04, legM); });
+    if (opts.modesty !== false && sit) {
+      // modesty panel on the far side
+      var axisX = sit[0] === 'x', sgn = sit[1] === '+' ? 1 : -1;
+      if (axisX) box(g, cx - sgn * (w / 2 - 0.05), h / 2, cz, 0.02, h * 0.55, d - 0.1, top);
+      else box(g, cx, h / 2, cz - sgn * (d / 2 - 0.05), w - 0.1, h * 0.55, 0.02, top);
+    }
+    if (!sit) return g;
+    var ax = sit[0] === 'x', s = sit[1] === '+' ? 1 : -1;
+    var half = ax ? w / 2 : d / 2;
+    function at(alongSit, across) { return ax ? [cx + s * alongSit, cz + across] : [cx + across, cz + s * alongSit]; }
+    function sz(alongSit, across) { return ax ? [alongSit, across] : [across, alongSit]; }
+    if (opts.monitor !== false) {
+      var mp = at(-(half - 0.14), 0), ms = sz(0.03, 0.56);
+      box(g, mp[0], h + 0.38, mp[1], ms[0], 0.34, ms[1], SCREEN);
+      var np = at(-(half - 0.16), 0); box(g, np[0], h + 0.1, np[1], 0.04, 0.18, 0.04, DARK);
+      var fs = sz(0.16, 0.22); box(g, np[0], h + 0.008, np[1], fs[0], 0.016, fs[1], DARK);
+      var kb = at(-(half - 0.36), 0), ks = sz(0.15, 0.44); box(g, kb[0], h + 0.012, kb[1], ks[0], 0.02, ks[1], mat(0xE4E6E8));
+    }
+    if (opts.register) {
+      var rp = at(-(half - 0.2), -0.25); box(g, rp[0], h + 0.08, rp[1], 0.28, 0.16, 0.28, mat(0x2E3136, { r: 0.4 }));
+    }
+    if (opts.chair !== false) chair(g, at(half + 0.28, 0), ax ? (s > 0 ? -Math.PI / 2 : Math.PI / 2) : (s > 0 ? Math.PI : 0));
+    return g;
+  }
+  // office chair facing rotY (0 = facing +z, backrest on -z)
+  function chair(parent, p, rotY) {
+    var g = new THREE.Group(); g.position.set(p[0], 0, p[1]); g.rotation.y = rotY; parent.add(g);
+    box(g, 0, 0.47, 0, 0.46, 0.07, 0.44, FABRIC);
+    box(g, 0, 0.78, -0.22, 0.44, 0.5, 0.05, FABRIC);
+    cyl(g, 0, 0.24, 0, 0.025, 0.42, CHROME);
+    for (var i = 0; i < 5; i++) {
+      var a = i * Math.PI * 2 / 5, leg = box(g, Math.sin(a) * 0.15, 0.04, Math.cos(a) * 0.15, 0.04, 0.03, 0.3, DARK);
+      leg.rotation.y = a;
+    }
+  }
+  function stool(parent, x, z) {
+    var g = new THREE.Group(); g.position.set(x, 0, z); parent.add(g);
+    cyl(g, 0, 0.74, 0, 0.17, 0.05, mat(0x3B3B3B, { r: 0.6 }));
+    cyl(g, 0, 0.37, 0, 0.022, 0.72, CHROME);
+    cyl(g, 0, 0.012, 0, 0.2, 0.025, CHROME);
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.01, 6, 24), CHROME); ring.rotation.x = Math.PI / 2; ring.position.y = 0.3; g.add(ring);
+  }
+  function cartonsOn(x0, y0, x1, y1, h, n) {
+    for (var i = 0; i < n; i++) {
+      var sx = 0.25 + rnd() * 0.2, sz = 0.2 + rnd() * 0.15, sy = 0.15 + rnd() * 0.2;
+      var x = x0 / 40 + sx / 2 + 0.05 + rnd() * Math.max(0.01, (x1 - x0) / 40 - sx - 0.1);
+      var z = y0 / 40 + sz / 2 + 0.05 + rnd() * Math.max(0.01, (y1 - y0) / 40 - sz - 0.1);
+      products.push({ x: x, y: h + sy / 2, z: z, sx: sx, sy: sy, sz: sz, c: 0xC9A27A });
+    }
+  }
+  function door(parent, x0, y0, x1, y1, h, color, glass) {
+    var g = new THREE.Group(); parent.add(g);
+    var X0 = x0 / 40, X1 = x1 / 40, Z0 = y0 / 40, Z1 = y1 / 40, alongX = (X1 - X0) >= (Z1 - Z0);
+    var cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2, L = alongX ? X1 - X0 : Z1 - Z0, t = 0.04;
+    if (glass) {
+      // two glass leaves with aluminium frames
+      [-1, 1].forEach(function (sd) {
+        var lc = sd * L / 4, lw = L / 2 - 0.01;
+        var p = alongX ? [cx + lc, cz] : [cx, cz + lc];
+        var fr = function (a, y, aw, hh) { return alongX ? box(g, p[0] + a, y, p[1], aw, hh, t, ALU) : box(g, p[0], y, p[1] + a, t, hh, aw, ALU); };
+        fr(-lw / 2 + 0.025, h / 2, 0.05, h); fr(lw / 2 - 0.025, h / 2, 0.05, h);
+        fr(0, h - 0.04, lw, 0.08); fr(0, 0.06, lw, 0.12);
+        var gm = alongX ? box(g, p[0], h / 2, p[1], lw - 0.1, h - 0.2, 0.01, GLASS, false) : box(g, p[0], h / 2, p[1], 0.01, h - 0.2, lw - 0.1, GLASS, false);
+        var hp = -sd * (lw / 2 - 0.08);
+        if (alongX) box(g, p[0] + hp, 1.05, p[1], 0.03, 0.5, 0.09, CHROME); else box(g, p[0], 1.05, p[1] + hp, 0.09, 0.5, 0.03, CHROME);
+      });
+    } else {
+      var dm = mat(color, { r: 0.55 });
+      if (alongX) box(g, cx, h / 2, cz, L - 0.04, h, t, dm); else box(g, cx, h / 2, cz, t, h, L - 0.04, dm);
+      var hx = alongX ? [cx + L / 2 - 0.12, cz] : [cx, cz + L / 2 - 0.12];
+      box(g, hx[0], 1.0, hx[1], alongX ? 0.12 : 0.07, 0.025, alongX ? 0.07 : 0.12, CHROME);
+    }
+  }
+
+  // ---------- building ----------
+  var H = 3.0;
+  var floorTex = tileTexture(); floorTex.repeat.set(332 / 40 / 0.6, 452 / 40 / 0.6);
+  var floor = pbox(world, -6, 34, 326, 486, -0.05, 0.05, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.55 }), false);
+  var rTex = tileTexture(); rTex.repeat.set(108 / 40 / 0.6, 126 / 40 / 0.6);
+  pbox(world, -6, -92, 102, 34, -0.05, 0.05, new THREE.MeshStandardMaterial({ map: rTex, roughness: 0.55 }), false);
+  pbox(world, 102, -8, 326, 34, -0.05, 0.05, mat(0xCFCBC2, { r: 0.9 }), false); // back area outside the wall
+  var ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.ShadowMaterial({ opacity: 0.12 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.set(4, -0.051, 5); ground.receiveShadow = true; scene.add(ground);
+
+  var W = wallGroup;
+  pbox(W, -6, 34, 0, 480, 0, H, WALL); pbox(W, 320, 34, 326, 480, 0, H, WALL);
+  // glass partition: pane + aluminium rails + mullions about every metre
+  function glassWall(x0, y0, x1, y1, z0, h) {
+    var alongX = (x1 - x0) >= (y1 - y0), L = alongX ? x1 - x0 : y1 - y0, n = Math.max(1, Math.round(L / 40));
+    var mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    if (alongX) pbox(W, x0, my - 0.5, x1, my + 0.5, z0, h, GLASS, false); else pbox(W, mx - 0.5, y0, mx + 0.5, y1, z0, h, GLASS, false);
+    if (alongX) { pbox(W, x0, my - 2, x1, my + 2, z0, 0.08, ALU); pbox(W, x0, my - 2, x1, my + 2, z0 + h - 0.05, 0.05, ALU); }
+    else { pbox(W, mx - 2, y0, mx + 2, y1, z0, 0.08, ALU); pbox(W, mx - 2, y0, mx + 2, y1, z0 + h - 0.05, 0.05, ALU); }
+    for (var i = 0; i <= n; i++) {
+      var t = Math.min(i * L / n, L - 2);
+      if (alongX) pbox(W, x0 + t, my - 2, x0 + t + 2, my + 2, z0, h, ALU); else pbox(W, mx - 2, y0 + t, mx + 2, y0 + t + 2, z0, h, ALU);
+    }
+  }
+  [[146, 168], [312, 326], [102, 110]].forEach(function (s) { pbox(W, s[0], 34, s[1], 40, 0, H, WALL); });
+  pbox(W, 168, 34, 312, 40, 2.6, H - 2.6, WALL); // header above the built-in
+  glassWall(-6, 34, 52, 40, 0, H); glassWall(78, 34, 102, 40, 0, H);
+  glassWall(52, 34, 78, 40, 2.1, H - 2.1); pbox(W, 110, 34, 146, 40, 2.1, H - 2.1, WALL);
+  door(W, 110, 36, 146, 38, 2.1, C.door[0], false);
+  door(W, 52, 36, 78, 38, 2.1, C.door[0], false);
+
+  // front glass shopfront with mullions
+  [[-6, 58], [120, 188], [248, 326]].forEach(function (s) {
+    pbox(W, s[0], 482, s[1], 484, 0, H, GLASS, false);
+    for (var x = s[0]; x <= s[1]; x += Math.max(20, (s[1] - s[0]) / Math.max(1, Math.round((s[1] - s[0]) / 48)))) pbox(W, Math.min(x, s[1] - 2), 481, Math.min(x, s[1] - 2) + 2, 485, 0, H, ALU);
+    pbox(W, s[1] - 2, 481, s[1], 485, 0, H, ALU);
+  });
+  pbox(W, -6, 481, 326, 485, 2.2, 0.06, ALU); pbox(W, -6, 481, 326, 485, H - 0.06, 0.06, ALU); pbox(W, -6, 481, 326, 485, 0, 0.08, ALU);
+  pbox(W, 58, 482, 120, 484, 2.26, H - 2.32, GLASS, false); pbox(W, 188, 482, 248, 484, 2.26, H - 2.32, GLASS, false);
+  door(W, 58, 482, 120, 484, 2.2, null, true); door(W, 188, 482, 248, 484, 2.2, null, true);
+
+  // office room
+  glassWall(-6, -92, 0, 34, 0, H); glassWall(-6, -92, 102, -86, 0, H);
+  glassWall(96, -86, 102, -6, 0, H); glassWall(96, 22, 102, 34, 0, H); glassWall(96, -6, 102, 22, 2.1, H - 2.1);
+  door(W, 98, -6, 100, 22, 2.1, C.door[0], false);
+  // columns
+  [0, 160, 320].forEach(function (cx) { [0, 160, 320, 480].forEach(function (cy) { pbox(W, cx - 8, cy - 8, cx + 8, cy + 8, 0, H, CONC); }); });
+
+  // ---------- furniture (before / after / after 2 / layout 4) ----------
+  var root = world;
+  function label(text, x, y, z, w) {
+    var c = document.createElement('canvas'); c.width = 512; c.height = 96; var g = c.getContext('2d');
+    g.font = '600 46px "IBM Plex Sans Thai", sans-serif';
+    var tw = Math.min(500, g.measureText(text).width + 48);
+    g.fillStyle = 'rgba(31,35,40,0.88)';
+    if (g.roundRect) { g.beginPath(); g.roundRect((512 - tw) / 2, 4, tw, 88, 18); g.fill(); } else g.fillRect((512 - tw) / 2, 4, tw, 88);
+    g.fillStyle = '#FFFFFF'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 256, 50);
+    var t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding;
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false }));
+    sp.scale.set(w || 2.0, (w || 2.0) * 96 / 512, 1); sp.position.set(x, y, z); sp.renderOrder = 10; world.add(sp);
+  }
+  function cabinet(x0p, y0p, x1p, y1p) {
+    var x0 = x0p / 40, x1 = x1p / 40, z0 = y0p / 40, z1 = y1p / 40, h = 1.2;
+    var bm = mat(C.blue[0], { r: 0.4, m: 0.5 });
+    box(world, (x0 + x1) / 2, h / 2, (z0 + z1) / 2, x1 - x0, h, z1 - z0, bm);
+    for (var i = 1; i < 4; i++) box(world, x0 - 0.003, i * h / 4, (z0 + z1) / 2, 0.006, 0.012, z1 - z0 - 0.06, DARK, false);
+    for (i = 0; i < 4; i++) box(world, x0 - 0.02, i * h / 4 + h / 8, (z0 + z1) / 2, 0.02, 0.03, 0.22, CHROME, false);
+  }
+  // small product rack ("green" shelf): black slotted-angle rack, 5 boards, one carton per bay (2 if wide), trophies on top
+  var DARKSHIRTS = [0x2A3350, 0x6E2A35, 0x3D4F6E, 0xF0F0F0, 0x22262E, 0x5A6A8A];
+  function greenRack(x0, y0, x1, y1, backSide) {
+    var X0 = x0 / 40, X1 = x1 / 40, Z0 = y0 / 40, Z1 = y1 / 40;
+    var w = X1 - X0, d = Z1 - Z0, cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2;
+    var alongX = w >= d, L = alongX ? w : d, D = alongX ? d : w;
+    function P(a, b) { return alongX ? [cx + a, cz + b] : [cx + b, cz + a]; }
+    function S(a, b) { return alongX ? [a, b] : [b, a]; }
+    var blk = mat(0x1E1F22, { r: 0.55, m: 0.4 }), tag = mat(C.green[0], { r: 0.5 });
+    var H = 1.75, post = 0.035;
+    [-1, 1].forEach(function (sa) { [-1, 1].forEach(function (sb) {
+      var p = P(sa * (L / 2 - post / 2), sb * (D / 2 - post / 2)); box(world, p[0], H / 2, p[1], post, H, post, blk);
+    }); });
+    var faces = backSide ? [-backSide] : [-1, 1];
+    var levels = [0.04, 0.42, 0.8, 1.18, 1.56];
+    levels.forEach(function (y, li) {
+      var bs = S(L, D); box(world, cx, y, cz, bs[0], 0.02, bs[1], blk);
+      faces.forEach(function (f) { var tp = P(0, f * (D / 2 - 0.004)), ts = S(L * 0.98, 0.008); box(world, tp[0], y + 0.02, tp[1], ts[0], 0.02, ts[1], tag, false); });
+      if (li === levels.length - 1) {
+        // trophies wrapped in plastic on the top board
+        for (var t = 0; t < Math.max(1, Math.round(L / 0.3)); t++) {
+          var tp2 = P(-L / 2 + (t + 0.5) * L / Math.max(1, Math.round(L / 0.3)), 0);
+          products.push({ x: tp2[0], y: y + 0.07, z: tp2[1], sx: 0.12, sy: 0.12, sz: 0.12, c: 0x2B2B2B });
+          products.push({ x: tp2[0], y: y + 0.2, z: tp2[1], sx: 0.09, sy: 0.16, sz: 0.09, c: 0xC9A443 });
+        }
+        return;
+      }
+      var cols = L > 0.6 ? 2 : 1, bw = L / cols, bh = 0.34;
+      var depth = D - 0.04;
+      for (var c = 0; c < cols; c++) {
+        var a = -L / 2 + bw * c + bw / 2, by = y + 0.012 + bh / 2, cb = 0;
+        var pc = P(a, cb), ps = S(bw - 0.02, depth);
+        products.push({ x: pc[0], y: by, z: pc[1], sx: ps[0], sy: bh, sz: ps[1], c: 0xD6C3A0 });
+        faces.forEach(function (f) {
+          var faceB = cb + f * (depth / 2 + 0.003);
+          [-0.27, 0.27].forEach(function (wo) {
+            var ww = (bw - 0.02) * 0.3, layers = 4, lh = bh * 0.62 / layers;
+            for (var k = 0; k < layers; k++) {
+              var wp = P(a + wo * (bw - 0.02), faceB), wsz = S(ww, 0.006);
+              products.push({ x: wp[0], y: by - bh * 0.28 + lh * (k + 0.5), z: wp[1], sx: wsz[0], sy: lh * 0.9, sz: wsz[1], c: DARKSHIRTS[Math.floor(rnd() * DARKSHIRTS.length)] });
+            }
+          });
+          var lp = P(a, faceB + f * 0.001), lsz = S(0.1, 0.004);
+          products.push({ x: lp[0], y: by + bh * 0.08, z: lp[1], sx: lsz[0], sy: 0.12, sz: lsz[1], c: 0xFAFAFA });
+        });
+      }
+    });
+  }
+  function greens(list) { list.forEach(function (r) { greenRack(r[0] + 0.5, r[1] + 0.5, r[2] - 0.5, r[3] - 0.5, r[4] || 0); }); }
+  // product rack ("red" shelf): galvanised steel angle rack, 3 levels, cut-open cartons of folded shirts stacked 2 high
+  var SHIRTS = [0xE8728F, 0x2AA198, 0xF08A3C, 0x8E7CC3, 0xF2D24B, 0x34416B, 0xF4F4F4, 0xE85D5D, 0x5BB6D9];
+  function cartonRack(x0, y0, x1, y1, opts) {
+    opts = opts || {};
+    var X0 = x0 / 40, X1 = x1 / 40, Z0 = y0 / 40, Z1 = y1 / 40;
+    var w = X1 - X0, d = Z1 - Z0, cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2;
+    var alongX = w >= d, L = alongX ? w : d, D = alongX ? d : w;
+    function P(a, b) { return alongX ? [cx + a, cz + b] : [cx + b, cz + a]; }
+    function S(a, b) { return alongX ? [a, b] : [b, a]; }
+    var steel = mat(0xA9AEB3, { r: 0.45, m: 0.6 }), lip = mat(C.red[0], { r: 0.5 });
+    var postH = 1.75, post = 0.04;
+    [-1, 1].forEach(function (sa) { [-1, 1].forEach(function (sb) {
+      var p = P(sa * (L / 2 - post / 2), sb * (D / 2 - post / 2)); box(world, p[0], postH / 2, p[1], post, postH, post, steel);
+    }); });
+    var faces = opts.backSide ? [-opts.backSide] : [-1, 1];
+    [0.05, 0.71, 1.37].forEach(function (y) {
+      var bs = S(L, D); box(world, cx, y, cz, bs[0], 0.02, bs[1], steel);
+      faces.forEach(function (f) { var lp = P(0, f * (D / 2 - 0.005)), ls = S(L, 0.012); box(world, lp[0], y - 0.005, lp[1], ls[0], 0.035, ls[1], lip, false); });
+      var cols = 4, bw = L / cols, bh = 0.31;
+      var depth = D - 0.06;
+      for (var r = 0; r < 2; r++) for (var c = 0; c < cols; c++) {
+        if (rnd() < 0.05) continue;
+        var a = -L / 2 + bw * c + bw / 2, by = y + 0.012 + r * (bh + 0.004) + bh / 2, cb = 0;
+        var pc = P(a, cb), ps = S(bw - 0.025, depth);
+        products.push({ x: pc[0], y: by, z: pc[1], sx: ps[0], sy: bh, sz: ps[1], c: 0xD6C3A0 });
+        faces.forEach(function (f) {
+          // two cut-out windows showing stacked colourful shirts
+          var faceB = cb + f * (depth / 2 + 0.003);
+          [-0.27, 0.27].forEach(function (wo) {
+            var ww = (bw - 0.025) * 0.3, layers = 4, lh = bh * 0.62 / layers;
+            for (var k = 0; k < layers; k++) {
+              var wp = P(a + wo * (bw - 0.025), faceB), wsz = S(ww, 0.006);
+              products.push({ x: wp[0], y: by - bh * 0.28 + lh * (k + 0.5), z: wp[1], sx: wsz[0], sy: lh * 0.92, sz: wsz[1], c: SHIRTS[Math.floor(rnd() * SHIRTS.length)] });
+            }
+          });
+          // size label
+          var lpos = P(a, faceB + f * 0.001), lsz = S(0.09, 0.004);
+          products.push({ x: lpos[0], y: by + bh * 0.05, z: lpos[1], sx: lsz[0], sy: 0.12, sz: lsz[1], c: 0xFAFAFA });
+        });
+      }
+    });
+  }
+  function reds(x, ys, opts) { ys.forEach(function (y) { cartonRack(x, y + 0.5, x + 24, y + 79.5, opts); }); }
+
+  // built-in wall shelving on the back wall: white frame to 2.6 m, cut-open size cartons, red header strip, decor on top
+  function wallShelf(x0p, x1p) {
+    var X0 = x0p / 40, X1 = x1p / 40, L = X1 - X0, D = 0.45, zb = 16 / 40, zf = zb + D, zc = zb + D / 2, cx = (X0 + X1) / 2; // set into the back wall line, opening into the shop
+    var white = mat(0xF4F3EF, { r: 0.6 }), red = mat(0xC62828, { r: 0.45 });
+    var t = 0.025, top = 2.6;
+    box(world, X0 + t / 2, top / 2, zc, t, top, D, white); box(world, X1 - t / 2, top / 2, zc, t, top, D, white);
+    box(world, cx, top - t / 2, zc, L, t, D, white); box(world, cx, top / 2, zb + 0.01, L, top, 0.02, white);
+    var nBays = Math.max(1, Math.round(L / 1.0)), bay = (L - t) / nBays;
+    for (var i = 1; i < nBays; i++) box(world, X0 + t / 2 + i * bay, top / 2, zc, t, top, D, white);
+    [0.08, 0.86, 2.18].forEach(function (y) { box(world, cx, y, zc, L - 0.01, t, D, white); });
+    box(world, cx, 0.86 - 0.03, zf + 0.005, L - 0.02, 0.09, 0.01, red); // brand strip
+    for (i = 0; i < nBays; i++) {
+      var bx0 = X0 + t + i * bay, bw = bay - t;
+      // cartons: lower section 2 rows (0.09-0.85), upper section 3 rows (0.87-2.17)
+      [[0.095, 0.85, 2], [0.875, 2.165, 3]].forEach(function (sec) {
+        var rows = sec[2], rh = (sec[1] - sec[0]) / rows, cols = Math.max(1, Math.floor(bw / 0.36)), cw = bw / cols;
+        for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+          if (rnd() < 0.08) continue;
+          var bxC = bx0 + cw * c + cw / 2, byC = sec[0] + rh * r + (rh - 0.01) / 2, bh = rh - 0.012, bwid = cw - 0.012;
+          products.push({ x: bxC, y: byC, z: zc + 0.02, sx: bwid, sy: bh, sz: D - 0.06, c: 0xD8C7A6 });
+          // cut-out window showing folded navy shirts
+          products.push({ x: bxC + bwid * 0.12, y: byC + bh * 0.02, z: zc + 0.02 + (D - 0.06) / 2 + 0.004, sx: bwid * 0.42, sy: bh * 0.62, sz: 0.01, c: 0x1E2638 });
+        }
+      });
+      // decor on the top shelf
+      for (var k = 0; k < 3; k++) {
+        if (rnd() < 0.3) continue;
+        var dh = 0.15 + rnd() * 0.2;
+        products.push({ x: bx0 + 0.15 + k * (bw - 0.3) / 2, y: 2.19 + dh / 2, z: zc, sx: 0.12 + rnd() * 0.1, sy: dh, sz: 0.12, c: [0xC9A443, 0xE8E2D2, 0x7E9DB8][k % 3] });
+      }
+    }
+  }
+  function qcStation(x0, y0, w, h) {
+    // 2 x 2 high tables (each 0.48 x 1.2 m) with inspection lamp, tray and cartons; w,h in plan px
+    var cw = w / 2, ch = h / 2;
+    for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) desk(x0 + cw * i + 0.5, y0 + ch * j + 0.5, x0 + cw * (i + 1) - 0.5, y0 + ch * (j + 1) - 0.5, C.high[0], null, { h: 1.0, legs: CHROME, modesty: false });
+    cartonsOn(x0 + 2, y0 + 2, x0 + w - 2, y0 + ch - 8, 1.0, 2); cartonsOn(x0 + 2, y0 + ch + 10, x0 + w - 2, y0 + h - 2, 1.0, 1);
+    var lx = (x0 + w - 4) / 40, lz = (y0 + ch) / 40;
+    box(world, lx, 1.01, lz, 0.14, 0.02, 0.14, DARK);
+    var arm = box(world, lx, 1.28, lz, 0.025, 0.55, 0.025, CHROME); arm.rotation.z = 0.35;
+    var head = box(world, lx - 0.18, 1.52, lz, 0.22, 0.05, 0.12, DARK); head.rotation.z = -0.25;
+    box(world, (x0 + 4) / 40 + 0.15, 1.01, (y0 + ch + 2) / 40, 0.3, 0.025, 0.3, mat(0xD9DDE1, { r: 0.4, m: 0.4 }));
+    label('โต๊ะ QC', (x0 + w / 2) / 40, 2.0, (y0 + ch) / 40, 1.4);
+  }
+  function buildVariant(name) {
+    var grp = new THREE.Group(); root.add(grp); world = grp; products = []; seed = 7;
+    var k;
+    // common: computer desks, utility tables, QC tables, front bar, black rack, left wall shelves
+    desk(72, -72, 96, -12, C.comp[0], 'x-');
+    desk(0, 6, 50, 30, C.comp[0], 'z-');
+    desk(0, 60, 60, 84, C.comp[0], 'z-');
+    desk(0, 110, 60, 134, C.comp[0], 'z-');
+    desk(8, 134, 60, 152, C.util[0], null, { legs: ALU }); cartonsOn(8, 134, 60, 152, 0.75, 2);
+    desk(60, 104, 82, 164, C.util[0], null, { legs: ALU }); cartonsOn(60, 104, 82, 164, 0.75, 2);
+    shelf(146, 63, 166, 145, 2.0, 5, C.black[0], { bins: true, board: 0x3A3C40 });
+    reds(8, [161, 241, 321, 401], { backSide: -1 });
+    greens([[154, 181, 168, 221, 1]]);
+    wallShelf(168, 312);
+
+    if (name === 'before') {
+      desk(84, 360, 108, 420, C.acct[0], 'x-', { register: true });
+      desk(84, 201, 108, 261, C.comp[0], 'x+');
+      qcStation(78, 261, 38, 97);
+      for (k = 0; k < 4; k++) {
+        desk(120 + 44 * k + 0.5, 462, 164 + 44 * k - 0.5, 480, C.high[0], null, { h: 1.0, legs: CHROME, modesty: false });
+        stool(world, (142 + 44 * k) / 40, 455 / 40 - 0.12);
+      }
+      cabinet(150, 349, 167, 397);
+      reds(168, [65, 145, 270, 350]);
+      [66, 146, 270, 350].forEach(function (y) { reds(216, [y], { backSide: 1 }); reds(240, [y], { backSide: -1 }); });
+      for (k = 0; k < 4; k++) cartonRack(288, 160 + 75 * k + 0.5, 312, 235 + 75 * k - 0.5, { backSide: 1 });
+      greens([[150, 255, 192, 269, 1], [136, 270, 150, 307, -1], [136, 307, 150, 344, -1], [216, 52, 264, 66, 1], [216, 255, 264, 269, 1], [216, 431, 264, 445, -1],
+              [298, 42, 312, 78, 1], [298, 78, 312, 114, 1], [298, 114, 312, 150, 1]]);
+    } else if (name === 'after2') {
+      // after 2: the "before" layout without the 4 high tables at the glass; accounting desk (register only, no computer)
+      // moved to the front-right corner beside door 2 with the cash cabinet next to it; mid-aisle green caps removed,
+      // front red groups pushed back against the back groups
+      desk(250, 456, 302, 480, C.acct[0], 'z-', { register: true, monitor: false });
+      cabinet(302, 441, 318, 471);
+      desk(84, 201, 108, 261, C.comp[0], 'x+');
+      qcStation(78, 261, 38, 97);
+      reds(168, [65, 145, 225, 305]);
+      [66, 146, 226, 306].forEach(function (y) { reds(216, [y], { backSide: 1 }); reds(240, [y], { backSide: -1 }); });
+      for (k = 0; k < 4; k++) cartonRack(288, 140 + 75 * k + 0.5, 312, 215 + 75 * k - 0.5, { backSide: 1 });
+      greens([[153, 226, 167, 263, 1], [153, 263, 167, 300, 1], [216, 52, 264, 66, 1], [216, 386, 264, 400, -1],
+              [298, 42, 312, 74, 1], [298, 74, 312, 106, 1], [298, 106, 312, 138, 1]]);
+      label('แคชเชียร์', 276 / 40, 1.9, 468 / 40, 1.3);
+    } else if (name === 'v4') {
+      // layout 4 (mall style): shelving on the edges and in short bays off the right wall, a 1 m customer corridor
+      // down the middle, open front; QC at the front on the staff side, accounting desk (register only) front right
+      desk(250, 456, 302, 480, C.acct[0], 'z-', { register: true, monitor: false });
+      cabinet(302, 441, 318, 471);
+      desk(4, -80, 64, -56, C.comp[0], 'z+');
+      qcStation(120, 368, 40, 97);
+      reds(68, [184, 264], { backSide: 1 }); reds(92, [184, 264], { backSide: -1 });       // staff-side double row
+      reds(168, [64, 144, 224, 304], { backSide: -1 });                                    // along the column line, facing the corridor
+      [64, 148, 232, 316].forEach(function (y) {                                            // 4 bays off the right wall
+        cartonRack(232.5, y + 0.5, 311.5, y + 23.5, { backSide: -1 });
+        cartonRack(232.5, y + 24.5, 311.5, y + 47.5, { backSide: 1 });
+      });
+      greens([[154, 181, 168, 221, 1], [153, 226, 167, 263, 1], [153, 263, 167, 300, 1], [68, 170, 116, 184, 1], [68, 344, 116, 358, -1],
+              [168, 384, 192, 398, -1], [298, 368, 312, 404, 1], [298, 404, 312, 440, 1]]);
+      var walk = new THREE.Mesh(new THREE.PlaneGeometry(40 / 40, 340 / 40), new THREE.MeshBasicMaterial({ color: 0x3B7DD8, transparent: true, opacity: 0.12, depthWrite: false }));
+      walk.rotation.x = -Math.PI / 2; walk.position.set(212 / 40, 0.004, 230 / 40); world.add(walk);
+      label('ทางเดินลูกค้า', 212 / 40, 0.6, 230 / 40, 1.6);
+      label('แคชเชียร์', 276 / 40, 1.9, 468 / 40, 1.3);
+    } else {
+      // after (easy-walk): two long rows on the right with ~0.9 m aisles, 1 m aisle in front of the built-in,
+      // open front zone, cashier at front right, low green displays along the glass
+      desk(228, 426, 280, 450, C.acct[0], 'z-', { register: true });
+      desk(4, -80, 64, -56, C.comp[0], 'z+');                 // third computer desk moves into the glass office
+      qcStation(120, 368, 40, 97);                              // QC on the staff side, right of door 1
+      // low frosted partition between the staff side (door 1) and the elderly side (door 2 / cashier)
+      box(world, 167.5 / 40, 0.55, 442 / 40, 0.04, 1.1, 76 / 40, new THREE.MeshStandardMaterial({ color: 0xE8EEF2, roughness: 0.3, transparent: true, opacity: 0.75 }));
+      box(world, 167.5 / 40, 1.12, 442 / 40, 0.06, 0.04, 76 / 40, ALU);
+      reds(68, [184, 264], { backSide: 1 }); reds(92, [184, 264], { backSide: -1 }); // new double row where QC was
+      cabinet(282, 402, 298, 450);
+      [80, 160, 240, 320].forEach(function (y) { reds(204, [y], { backSide: 1 }); reds(228, [y], { backSide: -1 }); });
+      reds(288, [80, 160, 240, 320], { backSide: 1 });
+      greens([[153, 236, 167, 273, 1], [153, 273, 167, 310, 1], [204, 66, 252, 80, 1], [68, 170, 116, 184, 1], [68, 344, 116, 358, -1],
+              [34, 466, 56, 480, 1], [252, 466, 284, 480, 1], [286, 466, 310, 480, 1]]);
+      var zone = new THREE.Mesh(new THREE.PlaneGeometry(80 / 40, 58 / 40), new THREE.MeshBasicMaterial({ color: 0x2EAD5B, transparent: true, opacity: 0.16, depthWrite: false }));
+      zone.rotation.x = -Math.PI / 2; zone.position.set(76 / 40, 0.004, 433 / 40); world.add(zone);
+      label('พื้นที่โล่งหน้าร้าน', 76 / 40, 0.6, 433 / 40, 1.8);
+      var zone2 = zone.clone(); zone2.scale.set(40 / 80, 1, 1); zone2.position.set(208 / 40, 0.004, 433 / 40); world.add(zone2);
+      label('แคชเชียร์', 254 / 40, 1.9, 438 / 40, 1.3);
+      label('ฝั่งผู้สูงอายุ', 250 / 40, 3.3, 300 / 40, 2.2);
+      label('ฝั่งพนักงาน', 70 / 40, 3.3, 160 / 40, 2.0);
+    }
+
+    var im = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.75 }), products.length);
+    var m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), col = new THREE.Color();
+    products.forEach(function (p, i) {
+      m4.compose(new THREE.Vector3(p.x, p.y, p.z), q, new THREE.Vector3(p.sx, p.sy, p.sz));
+      im.setMatrixAt(i, m4); im.setColorAt(i, col.setHex(p.c));
+    });
+    im.castShadow = true; im.receiveShadow = true; world.add(im);
+    world = root;
+    return grp;
+  }
+  var layouts = { before: buildVariant('before'), after: buildVariant('after'), after2: buildVariant('after2'), v4: buildVariant('v4') };
+  var subs = {
+    before: 'ก่อน · โถง 8 × 12 ม. + ห้องทำงานกระจก 2.4 × 3 ม.',
+    after: 'หลัง · แยกฝั่งพนักงาน (ซ้าย · ประตู 1) กับฝั่งผู้สูงอายุ (ขวา · ประตู 2) · ชั้นแดงครบ 20 · ทางเดิน ~0.9–1 ม.',
+    after2: 'หลัง 2 · แบบก่อน เอาโต๊ะสูงหน้ากระจก 4 ตัวและชั้นเขียวกลางทางเดิน 2 ชุดออก · ถอยแถวแดงชิดกันไปด้านหลัง · โต๊ะบัญชี (ไม่มีคอม) มุมหน้าขวา',
+    v4: 'แบบ 4 · แบบห้าง ชั้นอยู่ริมและเป็นซอยสั้นจากผนังขวา ทางเดินลูกค้ากลาง 1 ม. หน้าร้านโล่ง · QC หน้าร้านฝั่งพนักงาน · โต๊ะบัญชี (ไม่มีคอม) มุมหน้าขวา'
+  };
+  function showLayout(n) {
+    ['before', 'after', 'after2', 'v4'].forEach(function (k) {
+      layouts[k].visible = k === n;
+      document.getElementById('l-' + k).setAttribute('aria-pressed', k === n ? 'true' : 'false');
+    });
+    document.getElementById('sub').textContent = subs[n];
+  }
+  ['before', 'after', 'after2', 'v4'].forEach(function (k) { document.getElementById('l-' + k).addEventListener('click', function () { showLayout(k); }); });
+  showLayout('v4');
+
+  // ---------- views ----------
+  var center = new THREE.Vector3(4, 0, 4.9);
+  var views = {
+    iso: [new THREE.Vector3(14, 12, 18), center.clone()],
+    top: [new THREE.Vector3(4, 22, 5.3), center.clone()],
+    front: [new THREE.Vector3(5.2, 1.6, 15.2), new THREE.Vector3(4, 1.0, 5)]
+  };
+  function setView(name) {
+    camera.position.copy(views[name][0]); controls.target.copy(views[name][1]); controls.update();
+    ['iso', 'top', 'front'].forEach(function (n) { document.getElementById('v-' + n).setAttribute('aria-pressed', n === name ? 'true' : 'false'); });
+  }
+  ['iso', 'top', 'front'].forEach(function (n) { document.getElementById('v-' + n).addEventListener('click', function () { setView(n); }); });
+  document.getElementById('v-walls').addEventListener('click', function () {
+    wallGroup.visible = !wallGroup.visible; this.setAttribute('aria-pressed', wallGroup.visible ? 'true' : 'false');
+  });
+  function resize() {
+    var w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false); camera.aspect = w / Math.max(h, 1);
+    var narrow = w < 560; views.iso[0].set(narrow ? 18 : 14, narrow ? 18 : 12, narrow ? 24 : 18);
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  function syncBg() { scene.background = new THREE.Color(stageColor()); }
+  if (window.matchMedia) { var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', syncBg); }
+  new MutationObserver(syncBg).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  resize(); setView('iso');
+  (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+})();
+</script>
+
+</body>
+</html>
